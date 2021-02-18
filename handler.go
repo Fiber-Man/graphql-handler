@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
@@ -37,6 +38,7 @@ type Handler struct {
 	playground       bool
 	rootObjectFn     RootObjectFn
 	resultCallbackFn ResultCallbackFn
+	requestOptionsFn RequestOptionsFn
 	maxMemory        int64
 	formatErrorFn    func(err error) gqlerrors.FormattedError
 }
@@ -219,7 +221,22 @@ func NewRequestOptions(r *http.Request, maxMemory int64) *RequestOptions {
 func (h *Handler) ContextHandler(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	// get query
 	opts := NewRequestOptions(r, h.maxMemory)
+	if h.requestOptionsFn != nil {
+		var err error
+		opts, err = h.requestOptionsFn(ctx, opts)
+		if err != nil {
+			errs := gqlerrors.FormattedErrors{}
+			errs = append(errs, gqlerrors.FormatError(fmt.Errorf("%s.Error: %v", "requestOptionsFn", err)))
 
+			result := &graphql.Result{
+				Errors: errs,
+			}
+			w.WriteHeader(http.StatusOK)
+			buff, _ := json.Marshal(result)
+			w.Write(buff)
+			return
+		}
+	}
 	// execute graphql query
 	params := graphql.Params{
 		Schema:         *h.Schema,
@@ -287,6 +304,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // RootObjectFn allows a user to generate a RootObject per request
 type RootObjectFn func(ctx context.Context, r *http.Request) map[string]interface{}
+type RequestOptionsFn func(ctx context.Context, opts *RequestOptions) (*RequestOptions, error)
 
 type Config struct {
 	Schema           *graphql.Schema
@@ -295,6 +313,7 @@ type Config struct {
 	Playground       bool
 	RootObjectFn     RootObjectFn
 	ResultCallbackFn ResultCallbackFn
+	RequestOptionsFn RequestOptionsFn
 	MaxMemory        int64
 	FormatErrorFn    func(err error) gqlerrors.FormattedError
 }
@@ -329,6 +348,7 @@ func New(p *Config) *Handler {
 		playground:       p.Playground,
 		rootObjectFn:     p.RootObjectFn,
 		resultCallbackFn: p.ResultCallbackFn,
+		requestOptionsFn: p.RequestOptionsFn,
 		maxMemory:        maxMemory,
 		formatErrorFn:    p.FormatErrorFn,
 	}
